@@ -54,8 +54,18 @@ namespace xam {
 //
 // We deliberately delay the XN_SYS_UI = false notification to give games time
 // to create a listener (if they're insane enough do this).
+XamDialog::XamDialog(xe::ui::ImGuiDrawer* imgui_drawer)
+    : xe::ui::ImGuiDialog(imgui_drawer) {
+  kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
+  kernel_state()->xam_state()->xam_dialogs_shown_++;
+}
 
-extern std::atomic<int> xam_dialogs_shown_;
+XamDialog::~XamDialog() {
+  kernel_state()->xam_state()->xam_dialogs_shown_--;
+  if (kernel_state()->xam_state()->xam_dialogs_shown_ == 0) {
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
+  }
+}
 
 template <typename T>
 X_RESULT xeXamDispatchDialog(T* dialog,
@@ -74,9 +84,7 @@ X_RESULT xeXamDispatchDialog(T* dialog,
         kernel_state()->emulator()->display_window()->app_context();
     if (app_context.CallInUIThreadSynchronous(
             [&dialog, &fence]() { dialog->Then(&fence); })) {
-      ++xam_dialogs_shown_;
       fence.Wait();
-      --xam_dialogs_shown_;
     } else {
       delete dialog;
     }
@@ -116,9 +124,7 @@ X_RESULT xeXamDispatchDialogEx(
     xe::threading::Fence fence;
     if (display_window->app_context().CallInUIThreadSynchronous(
             [&dialog, &fence]() { dialog->Then(&fence); })) {
-      ++xam_dialogs_shown_;
       fence.Wait();
-      --xam_dialogs_shown_;
     } else {
       delete dialog;
     }
@@ -190,20 +196,14 @@ X_RESULT xeXamDispatchHeadlessEx(
 template <typename T>
 X_RESULT xeXamDispatchDialogAsync(T* dialog,
                                   std::function<void(T*)> close_callback) {
-  kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
-  ++xam_dialogs_shown_;
-
   // Important to pass captured vars by value here since we return from this
   // without waiting for the dialog to close so the original local vars will be
   // destroyed.
   dialog->set_close_callback([dialog, close_callback]() {
     close_callback(dialog);
 
-    --xam_dialogs_shown_;
-
     auto run = []() -> void {
       xe::threading::Sleep(std::chrono::milliseconds(100));
-      kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
     };
 
     std::thread thread(run);
@@ -214,18 +214,12 @@ X_RESULT xeXamDispatchDialogAsync(T* dialog,
 }
 
 X_RESULT xeXamDispatchHeadlessAsync(std::function<void()> run_callback) {
-  kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
-  ++xam_dialogs_shown_;
-
   auto display_window = kernel_state()->emulator()->display_window();
   display_window->app_context().CallInUIThread([run_callback]() {
     run_callback();
 
-    --xam_dialogs_shown_;
-
     auto run = []() -> void {
       xe::threading::Sleep(std::chrono::milliseconds(100));
-      kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
     };
 
     std::thread thread(run);
@@ -393,7 +387,9 @@ static dword_result_t XamShowMessageBoxUi(
   return result;
 }
 
-dword_result_t XamIsUIActive_entry() { return xeXamIsUIActive(); }
+dword_result_t XamIsUIActive_entry() {
+  return kernel_state()->xam_state()->xam_dialogs_shown_ > 0;
+}
 DECLARE_XAM_EXPORT2(XamIsUIActive, kUI, kImplemented, kHighFrequency);
 
 // https://www.se7ensins.com/forums/threads/working-xshowmessageboxui.844116/
