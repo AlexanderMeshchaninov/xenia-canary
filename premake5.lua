@@ -126,7 +126,7 @@ filter({"configurations:Release", "platforms:Windows"}) -- "toolset:msc"
 filter("platforms:Linux")
   system("linux")
   toolset("clang")
-  vectorextensions("AVX2")
+  vectorextensions("AVX")
   --buildoptions({
   --    "-mlzcnt",   -- (don't) Assume lzcnt is supported.
   --})
@@ -190,6 +190,12 @@ if os.istarget("linux") and string.contains(CLANG_BIN, "clang") then
       disablewarnings({
         "deprecated-literal-operator",   -- Needed only for tabulate
         "nontrivial-memcall",
+      })
+  end
+  if tonumber(string.match(os.outputof(CLANG_BIN.." --version"), "version (%d%d)")) >= 21 then
+    filter({"language:C++", "toolset:clang"}) -- "platforms:Linux"
+      disablewarnings({
+        "character-conversion",          -- Needed for utfcpp third-party library
       })
   end
 end
