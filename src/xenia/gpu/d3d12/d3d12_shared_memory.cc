@@ -25,6 +25,8 @@ DEFINE_bool(d3d12_tiled_shared_memory, true,
             "to work.",
             "D3D12");
 
+DECLARE_bool(gpu_allow_invalid_upload_range);
+
 namespace xe {
 namespace gpu {
 namespace d3d12 {
@@ -418,6 +420,22 @@ bool D3D12SharedMemory::UploadRanges(
     uint32_t upload_range_length = upload_range.second;
     trace_writer_.WriteMemoryRead(upload_range_start << page_size_log2(),
                                   upload_range_length << page_size_log2());
+
+    if (upload_range_length > 0 && !cvars::gpu_allow_invalid_upload_range) {
+      const uint32_t upload_range_last_page =
+          upload_range_start + upload_range_length - 1;
+
+      const memory::PageAccess page_access =
+          memory().GetPhysicalHeap()->QueryRangeAccess(
+              upload_range_last_page << page_size_log2(),
+              upload_range_last_page
+                  << page_size_log2());  // Check only last page
+
+      if (page_access == xe::memory::PageAccess::kNoAccess) {
+        XELOGE("Invalid upload range for GPU: {:08X}", upload_range_start);
+        return false;
+      }
+    }
 
     while (upload_range_length != 0) {
       ID3D12Resource* upload_buffer;

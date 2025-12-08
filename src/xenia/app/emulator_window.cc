@@ -50,7 +50,7 @@ DECLARE_bool(guide_button);
 
 DECLARE_bool(clear_memory_page_state);
 
-DECLARE_bool(readback_resolve);
+DECLARE_string(readback_resolve);
 
 DECLARE_bool(readback_memexport);
 
@@ -140,6 +140,11 @@ DEFINE_int32(recent_titles_entry_amount, 10,
              "Allows user to define how many titles is saved in list of "
              "recently played titles.",
              "General");
+DEFINE_bool(disable_doubleclick_fullscreen, false,
+            "Allows the user to disable the behavior where a fast double-click "
+            "causes Xenia to enter fullscreen mode.",
+            "General");
+
 namespace xe {
 namespace app {
 
@@ -1095,7 +1100,8 @@ void EmulatorWindow::ExportScreenshot(const xe::ui::RawImage& image) {
   auto t = std::time(nullptr);
 
   // The format is: Year-Month-DayTHours-Minutes-Seconds based off ISO 8601
-  std::string datetime = fmt::format("{:%Y-%m-%dT%H-%M-%S}", fmt::localtime(t));
+  std::string datetime =
+      fmt::format("{:%Y-%m-%dT%H-%M-%S}", *std::localtime(&t));
 
   // Get the title id of the game because some titles contain characters that
   // cannot be used as a directory
@@ -1151,6 +1157,10 @@ void EmulatorWindow::SaveImage(const std::filesystem::path& filepath,
 }
 
 void EmulatorWindow::ToggleFullscreenOnDoubleClick() {
+  if (cvars::disable_doubleclick_fullscreen) {
+    return;
+  }
+
   // this function tests if user has double clicked.
   // if double click was achieved the fullscreen gets toggled
   const auto now = steady_clock::now();  // current mouse event time
@@ -1321,8 +1331,9 @@ void EmulatorWindow::ExtractZarchive() {
       if (result != X_STATUS_SUCCESS) {
         std::error_code ec;
 
-        // delete incomplete output file
-        std::filesystem::remove(abs_extract_dir, ec);
+        if (!std::filesystem::is_empty(abs_extract_dir)) {
+          std::filesystem::remove(abs_extract_dir, ec);
+        }
 
         summary += fmt::format("\nFailed: {}", zarchive_file_path);
 
@@ -1822,10 +1833,10 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
       xe::threading::Sleep(delay);
       break;
     case ButtonFunctions::ReadbackResolve:
-      ToggleGPUSetting(GPUSetting::ReadbackResolve);
+      CycleReadbackResolve();
 
-      notificationTitle = "Toggle Readback Resolve";
-      notificationDesc = cvars::readback_resolve ? "Enabled" : "Disabled";
+      notificationTitle = "Readback Resolve Mode";
+      notificationDesc = cvars::readback_resolve;
 
       // Extra Sleep
       xe::threading::Sleep(delay);
@@ -2009,12 +2020,20 @@ void EmulatorWindow::ToggleGPUSetting(gpu::GPUSetting setting) {
       SaveGPUSetting(GPUSetting::ClearMemoryPageState,
                      !cvars::clear_memory_page_state);
       break;
-    case GPUSetting::ReadbackResolve:
-      SaveGPUSetting(GPUSetting::ReadbackResolve, !cvars::readback_resolve);
-      break;
     case GPUSetting::ReadbackMemexport:
       SaveGPUSetting(GPUSetting::ReadbackMemexport, !cvars::readback_memexport);
       break;
+  }
+}
+
+void EmulatorWindow::CycleReadbackResolve() {
+  const std::string& current = cvars::readback_resolve;
+  if (current == "fast") {
+    gpu::SetReadbackResolveMode("full");
+  } else if (current == "full") {
+    gpu::SetReadbackResolveMode("none");
+  } else {
+    gpu::SetReadbackResolveMode("fast");
   }
 }
 
@@ -2056,8 +2075,7 @@ void EmulatorWindow::DisplayHotKeysConfig() {
   msg.insert(0, msg_passthru);
   msg += "\n";
 
-  msg += "Readback Resolve: " +
-         xe::string_util::BoolToString(cvars::readback_resolve);
+  msg += "Readback Resolve: " + cvars::readback_resolve;
   msg += "\n";
 
   msg += "Clear Memory Page State: " +
