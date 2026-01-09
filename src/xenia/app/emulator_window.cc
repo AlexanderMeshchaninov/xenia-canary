@@ -703,7 +703,8 @@ void EmulatorWindow::XMPConfigDialog::OnDraw(ImGuiIO& io) {
   ImGui::End();
 
   if (!dialog_open) {
-    emulator_window_.ToggleXMPConfigDialog();
+    Close();
+    emulator_window_.xmp_config_dialog_.release();
     return;
   }
 }
@@ -1072,6 +1073,10 @@ void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
 }
 
 void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
+  if (imgui_drawer_->IsAnyDialogOpen()) {
+    return;
+  }
+
   if (e.button() == ui::MouseEvent::Button::kLeft) {
     ToggleFullscreenOnDoubleClick();
   }

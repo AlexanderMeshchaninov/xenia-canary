@@ -103,37 +103,33 @@ dword_result_t XamUserGetSigninState_entry(dword_t user_index) {
 DECLARE_XAM_EXPORT2(XamUserGetSigninState, kUserProfiles, kImplemented,
                     kHighFrequency);
 
-typedef struct {
-  xe::be<uint64_t> xuid;
-  xe::be<uint32_t> flags;
-  xe::be<uint32_t> signin_state;
-  xe::be<uint32_t> guest_num;
-  xe::be<uint32_t> sponsor_user_index;
-  char name[16];
-} X_USER_SIGNIN_INFO;
-static_assert_size(X_USER_SIGNIN_INFO, 40);
-
 X_HRESULT_result_t XamUserGetSigninInfo_entry(
     dword_t user_index, dword_t flags, pointer_t<X_USER_SIGNIN_INFO> info) {
   if (!info) {
     return X_E_INVALIDARG;
   }
 
-  std::memset(info, 0, sizeof(X_USER_SIGNIN_INFO));
+  info.Zero();
+
   if (user_index >= XUserMaxUserCount) {
     return X_E_NO_SUCH_USER;
   }
 
-  if (kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
-    const auto& user_profile =
-        kernel_state()->xam_state()->GetUserProfile(user_index);
-    info->xuid = user_profile->xuid();
-    info->signin_state = user_profile->signin_state();
-    xe::string_util::copy_truncating(info->name, user_profile->name(),
-                                     xe::countof(info->name));
-  } else {
+  if (!kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
     return X_E_NO_SUCH_USER;
   }
+
+  const auto& user_profile =
+      kernel_state()->xam_state()->GetUserProfile(user_index);
+
+  xe::string_util::copy_truncating(info->name, user_profile->name(),
+                                   xe::countof(info->name));
+
+  if (!flags || flags & X_USER_GET_SIGNIN_INFO_OFFLINE_XUID_ONLY) {
+    info->xuid = user_profile->xuid();
+  }
+
+  info->signin_state = user_profile->signin_state();
   return X_E_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamUserGetSigninInfo, kUserProfiles, kImplemented);
@@ -192,12 +188,6 @@ dword_result_t XamUserGetGamerTag_entry(dword_t user_index, dword_t buffer,
   return X_E_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamUserGetGamerTag, kUserProfiles, kImplemented);
-
-typedef struct {
-  xe::be<uint32_t> setting_count;
-  xe::be<uint32_t> settings_ptr;
-} X_USER_READ_PROFILE_SETTINGS;
-static_assert_size(X_USER_READ_PROFILE_SETTINGS, 8);
 
 // https://github.com/oukiar/freestyledash/blob/master/Freestyle/Tools/Generic/xboxtools.cpp
 uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index,
@@ -758,8 +748,7 @@ dword_result_t XamParseGamerTileKey_entry(pointer_t<X_USER_DATA> key_ptr,
       kernel_memory()->TranslateVirtual<const char16_t*>(
           key_ptr->data.unicode.ptr)));
 
-  // Default key size is 24 bytes, but we need to include null terminator
-  if (tile_key.empty() || tile_key.size() != 24) {
+  if (tile_key.empty() || tile_key.size() != sizeof(GamerPictureKey)) {
     return X_ERROR_INVALID_PARAMETER;
   }
 
@@ -770,23 +759,20 @@ dword_result_t XamParseGamerTileKey_entry(pointer_t<X_USER_DATA> key_ptr,
   if (!is_valid_hex_string) {
     return X_ERROR_INVALID_PARAMETER;
   }
-  // Simple parser for key. Key (lower case) contains: title_id (8 chars),
-  // big_tile_id (8 chars), small_tile_id (8 chars)
-  std::string title_id = tile_key.substr(0, 8);
-  std::string big_tile_id = tile_key.substr(8, 8);
-  std::string small_tile_id = tile_key.substr(16, 8);
+
+  const GamerPictureKey* gamer_picture_key =
+      reinterpret_cast<const GamerPictureKey*>(tile_key.data());
 
   if (title_id_ptr) {
-    *title_id_ptr = string_util::from_string<uint32_t>(title_id, true);
+    *title_id_ptr = gamer_picture_key->GetTitleId();
   }
 
   if (big_tile_id_ptr) {
-    *big_tile_id_ptr = string_util::from_string<uint32_t>(big_tile_id, true);
+    *big_tile_id_ptr = gamer_picture_key->GetBigTileId();
   }
 
   if (small_tile_id_ptr) {
-    *small_tile_id_ptr =
-        string_util::from_string<uint32_t>(small_tile_id, true);
+    *small_tile_id_ptr = gamer_picture_key->GetSmallTileId();
   }
 
   bool is_from_dash = false;
@@ -991,14 +977,19 @@ dword_result_t XamUserGetOnlineCountryFromXUID_entry(qword_t xuid) {
 DECLARE_XAM_EXPORT1(XamUserGetOnlineCountryFromXUID, kUserProfiles,
                     kImplemented);
 
-constexpr uint8_t kStatsMaxAmount = 64;
-
-struct X_STATS_DETAILS {
-  xe::be<uint32_t> id;
-  xe::be<uint32_t> stats_amount;
-  xe::be<uint16_t> stats[kStatsMaxAmount];
-};
-static_assert_size(X_STATS_DETAILS, 8 + kStatsMaxAmount * 2);
+dword_result_t XamUserIsParentalControlled_entry(dword_t user_index) {
+  /* Notes:
+      - if (data_address < 1 || XamExecutingOnBehalfOfTitle == 0 || title id ==
+     kDashboardID || user_type != offline) (type mask used in XamUserGetXUID) go
+     forward else return false
+  */
+  const auto& user = kernel_state()->xam_state()->GetUserProfile(user_index);
+  if (!user || !user->IsParentalControlled()) {
+    return false;
+  }
+  return true;
+}
+DECLARE_XAM_EXPORT1(XamUserIsParentalControlled, kUserProfiles, kImplemented);
 
 dword_result_t XamUserCreateStatsEnumerator_entry(
     dword_t title_id, dword_t user_index, dword_t count, dword_t flags,
