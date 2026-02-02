@@ -356,6 +356,8 @@ dword_result_t XamUserWriteProfileSettings_entry(
   }
 
   auto run = [=](uint32_t& extended_error, uint32_t& length) {
+    bool was_avatar_setting_changed = false;
+    const uint8_t user_index_bit = (1 << user_index) & 0xF;
     // Update and save settings.
     const auto& user_profile =
         kernel_state()->xam_state()->GetUserProfile(user_index);
@@ -369,6 +371,11 @@ dword_result_t XamUserWriteProfileSettings_entry(
 
     for (uint32_t n = 0; n < setting_count; ++n) {
       const UserSetting setting = UserSetting(&settings[n]);
+      if (setting.get_setting_id() ==
+          static_cast<uint32_t>(
+              UserSettingId::XPROFILE_GAMERCARD_AVATAR_INFO_1)) {
+        was_avatar_setting_changed = true;
+      }
 
       if (!setting.is_valid_type()) {
         continue;
@@ -376,6 +383,13 @@ dword_result_t XamUserWriteProfileSettings_entry(
 
       kernel_state()->xam_state()->user_tracker()->UpsertSetting(
           user_profile->xuid(), title_id, &setting);
+    }
+
+    kernel_state()->BroadcastNotification(
+        kXNotificationSystemProfileSettingChanged, user_index_bit);
+    if (was_avatar_setting_changed) {
+      kernel_state()->BroadcastNotification(kXNotificationSystemAvatarChanged,
+                                            user_index_bit);
     }
 
     extended_error = X_HRESULT_FROM_WIN32(X_STATUS_SUCCESS);
@@ -568,11 +582,11 @@ dword_result_t XamUserCreateAchievementEnumerator_entry(
   }
 
   if (buffer_size_ptr) {
-    *buffer_size_ptr = static_cast<uint32_t>(entry_size) * count;
+    *buffer_size_ptr = static_cast<uint32_t>(entry_size * count);
   }
 
   auto e = object_ref<XAchievementEnumerator>(
-      new XAchievementEnumerator(kernel_state(), count, flags));
+      new XAchievementEnumerator(kernel_state(), count, offset, flags));
   auto result = e->Initialize(user_index, 0xFB, 0xB000A, 0xB000B, 0);
   if (XFAILED(result)) {
     return result;
@@ -595,15 +609,11 @@ dword_result_t XamUserCreateAchievementEnumerator_entry(
       kernel_state()->achievement_manager()->GetTitleAchievements(
           requester_xuid, title_id_);
 
-  const auto requested_achievements = user_title_achievements |
-                                      std::views::drop(offset) |
-                                      std::views::take(count);
-
-  if (requested_achievements.empty()) {
+  if (user_title_achievements.empty()) {
     return X_ERROR_INVALID_PARAMETER;
   }
 
-  for (const auto& entry : requested_achievements) {
+  for (const auto& entry : user_title_achievements) {
     auto unlock_time = X_FILETIME();
     if (entry.IsUnlocked() && entry.unlock_time.is_valid()) {
       unlock_time = entry.unlock_time;
