@@ -11,6 +11,7 @@
 
 #include <array>
 #include <cfloat>
+#include <cstddef>
 #include <cstring>
 
 #include "xenia/base/assert.h"
@@ -142,9 +143,11 @@ bool D3D12TextureCache::Initialize() {
   // Create the loading root signature.
   D3D12_ROOT_PARAMETER root_parameters[3];
   // Parameter 0 is constants (changed multiple times when untiling).
-  root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-  root_parameters[0].Descriptor.ShaderRegister = 0;
-  root_parameters[0].Descriptor.RegisterSpace = 0;
+  root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+  root_parameters[0].Constants.ShaderRegister = 0;
+  root_parameters[0].Constants.RegisterSpace = 0;
+  root_parameters[0].Constants.Num32BitValues =
+      sizeof(LoadConstants) / sizeof(uint32_t);
   root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   // Parameter 1 is the source (may be changed multiple times for the same
   // destination).
@@ -696,41 +699,55 @@ D3D12TextureCache::SamplerParameters D3D12TextureCache::GetSamplerParameters(
     parameters.border_color = xenos::BorderColor::k_ABGR_Black;
   }
 
-  uint32_t mip_min_level;
-  texture_util::GetSubresourcesFromFetchConstant(fetch, nullptr, nullptr,
-                                                 nullptr, nullptr, nullptr,
-                                                 &mip_min_level, nullptr);
+  uint32_t mip_min_level, mip_max_level;
+  texture_util::GetSubresourcesFromFetchConstant(
+      fetch, nullptr, nullptr, nullptr, nullptr, nullptr, &mip_min_level,
+      &mip_max_level);
   parameters.mip_min_level = mip_min_level;
+  bool has_mips = mip_max_level > mip_min_level;
+  xenos::TextureFilter mag_filter =
+      binding.mag_filter == xenos::TextureFilter::kUseFetchConst
+          ? fetch.mag_filter
+          : binding.mag_filter;
+  xenos::TextureFilter min_filter =
+      binding.min_filter == xenos::TextureFilter::kUseFetchConst
+          ? fetch.min_filter
+          : binding.min_filter;
+  xenos::TextureFilter mip_filter =
+      binding.mip_filter == xenos::TextureFilter::kUseFetchConst
+          ? fetch.mip_filter
+          : binding.mip_filter;
+  bool min_mag_linear = (mag_filter == xenos::TextureFilter::kLinear) &&
+                        (min_filter == xenos::TextureFilter::kLinear);
+  bool mip_filter_bilinear_or_trilinear =
+      mip_filter == xenos::TextureFilter::kPoint ||
+      mip_filter == xenos::TextureFilter::kLinear;
+  bool mip_base_map = mip_filter == xenos::TextureFilter::kBaseMap;
   // high cache miss count here, prefetch fetch earlier
   //  TODO(Triang3l): Disable filtering for texture formats not supporting it.
   xenos::AnisoFilter aniso_filter =
       binding.aniso_filter == xenos::AnisoFilter::kUseFetchConst
           ? fetch.aniso_filter
           : binding.aniso_filter;
+  // Apply anisotropic override, but only for mipmapped textures
+  // that are already using bilinear/trilinear filtering.
+  if (cvars::anisotropic_override > -1 && cvars::anisotropic_override < 6 &&
+      has_mips && !mip_base_map && min_mag_linear &&
+      mip_filter_bilinear_or_trilinear) {
+    aniso_filter = xenos::AnisoFilter(cvars::anisotropic_override);
+  }
   aniso_filter = std::min(aniso_filter, xenos::AnisoFilter::kMax_16_1);
   parameters.aniso_filter = aniso_filter;
-  xenos::TextureFilter mip_filter =
-      binding.mip_filter == xenos::TextureFilter::kUseFetchConst
-          ? fetch.mip_filter
-          : binding.mip_filter;
   if (aniso_filter != xenos::AnisoFilter::kDisabled) {
     parameters.mag_linear = 1;
     parameters.min_linear = 1;
     parameters.mip_linear = 1;
   } else {
-    xenos::TextureFilter mag_filter =
-        binding.mag_filter == xenos::TextureFilter::kUseFetchConst
-            ? fetch.mag_filter
-            : binding.mag_filter;
     parameters.mag_linear = mag_filter == xenos::TextureFilter::kLinear;
-    xenos::TextureFilter min_filter =
-        binding.min_filter == xenos::TextureFilter::kUseFetchConst
-            ? fetch.min_filter
-            : binding.min_filter;
     parameters.min_linear = min_filter == xenos::TextureFilter::kLinear;
     parameters.mip_linear = mip_filter == xenos::TextureFilter::kLinear;
   }
-  parameters.mip_base_map = mip_filter == xenos::TextureFilter::kBaseMap;
+  parameters.mip_base_map = mip_base_map;
 
   return parameters;
 }
@@ -827,40 +844,6 @@ void D3D12TextureCache::WriteSampler(SamplerParameters parameters,
   }
   ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
   device->CreateSampler(&desc, handle);
-}
-
-bool D3D12TextureCache::ClampDrawResolutionScaleToMaxSupported(
-    uint32_t& scale_x, uint32_t& scale_y,
-    const ui::d3d12::D3D12Provider& provider) {
-  bool was_clamped;
-  if (provider.GetTiledResourcesTier() < D3D12_TILED_RESOURCES_TIER_1) {
-    was_clamped = scale_x > 1 || scale_y > 1;
-    scale_x = 1;
-    scale_y = 1;
-    return !was_clamped;
-  }
-  // Limit to the virtual address space available for a resource.
-  was_clamped = false;
-  uint32_t virtual_address_bits_per_resource =
-      provider.GetVirtualAddressBitsPerResource();
-  while (scale_x > 1 || scale_y > 1) {
-    uint64_t highest_scaled_address =
-        uint64_t(SharedMemory::kBufferSize) * (scale_x * scale_y) - 1;
-    if (uint32_t(64) - xe::lzcnt(highest_scaled_address) <=
-        virtual_address_bits_per_resource) {
-      break;
-    }
-    // When reducing from a square size, prefer decreasing the horizontal
-    // resolution as vertical resolution difference is visible more clearly in
-    // perspective.
-    was_clamped = true;
-    if (scale_x >= scale_y) {
-      --scale_x;
-    } else {
-      --scale_y;
-    }
-  }
-  return !was_clamped;
 }
 
 bool D3D12TextureCache::EnsureScaledResolveMemoryCommitted(
@@ -1620,13 +1603,8 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     }
     const texture_util::TextureGuestLayout::Level& level_guest_layout =
         is_base ? guest_layout.base : guest_layout.mips[level];
-    uint32_t level_guest_pitch = level_guest_layout.row_pitch_bytes;
-    if (texture_key.tiled) {
-      // Shaders expect pitch in blocks for tiled textures.
-      level_guest_pitch /= bytes_per_block;
-      assert_zero(level_guest_pitch & (xenos::kTextureTileWidthHeight - 1));
-    }
-    load_constants.guest_pitch_aligned = level_guest_pitch;
+    load_constants.guest_pitch_aligned =
+        level_guest_layout.row_pitch_bytes / bytes_per_block;
     load_constants.guest_z_stride_block_rows_aligned =
         level_guest_layout.z_slice_stride_block_rows;
     assert_true(dimension != xenos::DataDimension::k3D ||
@@ -1669,22 +1647,23 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     load_constants.host_offset = uint32_t(level_host_slice_layout.Offset);
     load_constants.host_pitch = level_host_slice_layout.Footprint.RowPitch;
 
+    command_list.D3DSetComputeRoot32BitConstants(
+        0, sizeof(load_constants) / sizeof(uint32_t), &load_constants, 0);
+
     uint32_t level_array_slice_stride_bytes_scaled =
         level_guest_layout.array_slice_stride_bytes *
         (texture_resolution_scale_x * texture_resolution_scale_y);
     for (uint32_t slice = 0; slice < array_size; ++slice) {
-      D3D12_GPU_VIRTUAL_ADDRESS cbuffer_gpu_address;
-      uint8_t* cbuffer_mapping = cbuffer_pool.Request(
-          command_processor_.GetCurrentFrame(), sizeof(load_constants),
-          D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, nullptr, nullptr,
-          &cbuffer_gpu_address);
-      if (cbuffer_mapping == nullptr) {
-        command_processor_.ReleaseScratchGPUBuffer(copy_buffer,
-                                                   copy_buffer_state);
-        return false;
+      if (slice != 0) {
+        command_list.D3DSetComputeRoot32BitConstants(
+            0, sizeof(load_constants.guest_offset) / sizeof(uint32_t),
+            &load_constants.guest_offset,
+            offsetof(LoadConstants, guest_offset) / sizeof(uint32_t));
+        command_list.D3DSetComputeRoot32BitConstants(
+            0, sizeof(load_constants.host_offset) / sizeof(uint32_t),
+            &load_constants.host_offset,
+            offsetof(LoadConstants, host_offset) / sizeof(uint32_t));
       }
-      std::memcpy(cbuffer_mapping, &load_constants, sizeof(load_constants));
-      command_list.D3DSetComputeRootConstantBufferView(0, cbuffer_gpu_address);
       assert_true(copy_buffer_state == D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       command_processor_.SubmitBarriers();
       command_list.D3DDispatch(group_count_x, group_count_y,
