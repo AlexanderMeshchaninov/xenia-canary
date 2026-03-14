@@ -407,6 +407,9 @@ void KernelState::SetExecutableModule(object_ref<UserModule> module) {
         xboxkrnl::XboxkrnlModule::kExLoadedCommandLineSize);
   }
 
+  // Initialize file I/O hooks for XMP volume title-specific patches.
+  InitXmpVolumePatch();
+
   // Spin up deferred dispatch worker.
   // TODO(benvanik): move someplace more appropriate (out of ctor, but around
   // here).
@@ -621,7 +624,7 @@ const object_ref<UserModule> KernelState::LoadTitleUpdate(
       "UPDATE", 0, *title_update, content_license, disc_number);
 
   std::string mount_path = "";
-  if (!file_system()->FindSymbolicLink("game:", mount_path)) {
+  if (!file_system()->FindSymbolicLink(kDefaultGameSymbolicLink, mount_path)) {
     return nullptr;
   }
 
@@ -630,7 +633,8 @@ const object_ref<UserModule> KernelState::LoadTitleUpdate(
   }
 
   std::string resolved_path = "";
-  if (!file_system()->FindSymbolicLink("UPDATE:", resolved_path)) {
+  if (!file_system()->FindSymbolicLink(kDefaultUpdateSymbolicLink,
+                                       resolved_path)) {
     return nullptr;
   }
 
@@ -737,8 +741,13 @@ void KernelState::UnloadUserModule(const object_ref<UserModule>& module,
   object_table()->ReleaseHandleInLock(module->handle());
 }
 
+void KernelState::InitXmpVolumePatch() {
+  xmp_volume_patch_ = XmpVolumePatch::CreateForTitle(title_id(), this);
+}
+
 void KernelState::TerminateTitle() {
   XELOGD("KernelState::TerminateTitle");
+  xmp_volume_patch_.reset();
   auto global_lock = global_critical_region_.Acquire();
 
   // Call terminate routines.

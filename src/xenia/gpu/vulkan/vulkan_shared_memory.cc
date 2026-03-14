@@ -44,7 +44,9 @@ VulkanSharedMemory::VulkanSharedMemory(
 VulkanSharedMemory::~VulkanSharedMemory() { Shutdown(true); }
 
 bool VulkanSharedMemory::Initialize() {
-  InitializeCommon();
+  if (!InitializeCommon()) {
+    return false;
+  }
 
   const ui::vulkan::VulkanDevice* const vulkan_device =
       command_processor_.GetVulkanDevice();
@@ -444,7 +446,7 @@ bool VulkanSharedMemory::UploadRanges(
         break;
       }
       MakeRangeValid(upload_range_start << page_size_log2(),
-                     uint32_t(upload_buffer_size), false, false);
+                     uint32_t(upload_buffer_size), false);
 
       if (upload_buffer_size < (1ULL << 32) && upload_buffer_size > 8192) {
         memory::vastcpy(

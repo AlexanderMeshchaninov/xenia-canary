@@ -912,15 +912,15 @@ void GetResolveEdramTileSpan(ResolveEdramInfo edram_info,
 
 constexpr ResolveCopyShaderInfo
     resolve_copy_shader_info[size_t(ResolveCopyShaderIndex::kCount)] = {
-        {"Resolve Copy Fast 32bpp 1x/2xMSAA", false, 4, 4, 6, 3},
-        {"Resolve Copy Fast 32bpp 4xMSAA", false, 4, 4, 6, 3},
-        {"Resolve Copy Fast 64bpp 1x/2xMSAA", false, 4, 4, 5, 3},
-        {"Resolve Copy Fast 64bpp 4xMSAA", false, 3, 4, 5, 3},
-        {"Resolve Copy Full 8bpp", true, 2, 3, 6, 3},
-        {"Resolve Copy Full 16bpp", true, 2, 3, 5, 3},
-        {"Resolve Copy Full 32bpp", true, 2, 4, 5, 3},
-        {"Resolve Copy Full 64bpp", true, 2, 4, 5, 3},
-        {"Resolve Copy Full 128bpp", true, 2, 4, 4, 3},
+        {"Resolve Copy Fast 32bpp 1x/2xMSAA", 6, 3},
+        {"Resolve Copy Fast 32bpp 4xMSAA", 6, 3},
+        {"Resolve Copy Fast 64bpp 1x/2xMSAA", 5, 3},
+        {"Resolve Copy Fast 64bpp 4xMSAA", 5, 3},
+        {"Resolve Copy Full 8bpp", 6, 3},
+        {"Resolve Copy Full 16bpp", 5, 3},
+        {"Resolve Copy Full 32bpp", 5, 3},
+        {"Resolve Copy Full 64bpp", 5, 3},
+        {"Resolve Copy Full 128bpp", 4, 3},
 };
 XE_MSVC_OPTIMIZE_SMALL()
 bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
@@ -966,10 +966,13 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
           ? 0.5f
           : 0.0f;
   int32_t vertices_fixed[6];
+  float vertices_swapped[6];
   for (size_t i = 0; i < xe::countof(vertices_fixed); ++i) {
-    vertices_fixed[i] = ui::FloatToD3D11Fixed16p8(
-        xenos::GpuSwap(vertices_guest[i], fetch.endian) + half_pixel_offset);
+    vertices_swapped[i] = xenos::GpuSwap(vertices_guest[i], fetch.endian);
+    vertices_fixed[i] =
+        ui::FloatToD3D11Fixed16p8(vertices_swapped[i] + half_pixel_offset);
   }
+
   // Inclusive.
   int32_t x0 = std::min(std::min(vertices_fixed[0], vertices_fixed[2]),
                         vertices_fixed[4]);
@@ -1054,12 +1057,15 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
            xenos::kMaxResolveSize);
     y1 = y0 + int32_t(xenos::kMaxResolveSize);
   }
-  // fails in forza horizon 1
-  // x0 is 0, x1 is 0x100, y0 is 0x100, y1 is 0x100
-  assert_true(x0 <= x1 && y0 <= y1);
+  // If the region is empty or inverted after clipping (e.g., entirely outside
+  // EDRAM bounds due to window offset), treat as a no-op rather than an error.
+  // The caller checks width/height and skips the resolve.
+  // Reduces log spam in Forza Horizon 1/2 which seem to do a lot of these
+  // resolves without any visible impact on rendering.
   if (x0 >= x1 || y0 >= y1) {
-    XELOGE("Resolve region is empty");
-    return false;
+    info_out.coordinate_info.width_div_8 = 0;
+    info_out.height_div_8 = 0;
+    return true;
   }
 
   info_out.coordinate_info.width_div_8 =
