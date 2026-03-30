@@ -32,6 +32,15 @@ DEFINE_bool(emit_inline_mmio_checks, false,
             "Emit inline MMIO range checks for all I32 loads/stores instead "
             "of relying on exception-based MMIO detection.",
             "CPU");
+DEFINE_bool(emit_mmio_aware_stores_for_recorded_exception_addresses, true,
+            "Uses info gathered via record_mmio_access_exceptions to emit "
+            "special stores that are faster than trapping the exception",
+            "CPU");
+DEFINE_bool(record_mmio_access_exceptions, true,
+            "For guest addresses records whether we caught any mmio accesses "
+            "for them. This info can then be used on a subsequent run to "
+            "instruct the recompiler to emit checks",
+            "CPU");
 DEFINE_bool(protect_on_release, false,
             "Protect released memory to prevent accesses.", "Memory");
 DEFINE_bool(scribble_heap, false,
@@ -518,9 +527,15 @@ uint32_t Memory::HostToGuestVirtualThunk(const void* context,
 
 uint32_t Memory::GetPhysicalAddress(uint32_t address) const {
   const BaseHeap* heap = LookupHeap(address);
-  if (!heap || heap->heap_type() != HeapType::kGuestPhysical) {
+  if (!heap) {
     return UINT32_MAX;
   }
+
+  // Assumption that we already received physical address, so just return it.
+  if (heap->heap_type() != HeapType::kGuestPhysical && address < 0x1FFFFFFF) {
+    return address;
+  }
+
   return static_cast<const PhysicalHeap*>(heap)->GetPhysicalAddress(address);
 }
 

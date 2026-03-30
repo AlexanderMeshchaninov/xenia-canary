@@ -24,17 +24,19 @@ if(WIN32)
     ${CMAKE_CURRENT_SOURCE_DIR}/main_resources.rc
     ${PROJECT_SOURCE_DIR}/src/xenia/base/app_win32.manifest
   )
-  # main_init_win.cc needs SSE2 only (not AVX)
-  set_source_files_properties(
-    ${PROJECT_SOURCE_DIR}/src/xenia/base/main_init_win.cc
-    PROPERTIES COMPILE_OPTIONS "/arch:SSE2"
-  )
+  if(XE_TARGET_X86_64)
+    # main_init_win.cc needs SSE2 only (not AVX)
+    set_source_files_properties(
+      ${PROJECT_SOURCE_DIR}/src/xenia/base/main_init_win.cc
+      PROPERTIES COMPILE_OPTIONS "/arch:SSE2"
+    )
+  endif()
 else()
   target_sources(xenia-app PRIVATE
     ${PROJECT_SOURCE_DIR}/src/xenia/base/main_init_posix.cc
     ${PROJECT_SOURCE_DIR}/src/xenia/ui/windowed_app_main_posix.cc
   )
-  if(NOT MSVC)
+  if(NOT MSVC AND XE_TARGET_X86_64)
     set_source_files_properties(
       ${PROJECT_SOURCE_DIR}/src/xenia/base/main_init_posix.cc
       PROPERTIES COMPILE_OPTIONS "-msse2;-mno-avx"
@@ -56,13 +58,11 @@ target_link_libraries(xenia-app PRIVATE
   xenia-cpu
   xenia-gpu
   xenia-gpu-null
-  xenia-gpu-vulkan
   xenia-hid
   xenia-hid-nop
   xenia-kernel
   xenia-patcher
   xenia-ui
-  xenia-ui-vulkan
   xenia-vfs
   # Third-party
   aes_128
@@ -70,7 +70,6 @@ target_link_libraries(xenia-app PRIVATE
   fmt
   dxbc
   discord-rpc
-  glslang-spirv
   imgui
   libavcodec
   libavutil
@@ -78,6 +77,15 @@ target_link_libraries(xenia-app PRIVATE
   snappy
   xxhash
 )
+
+# Vulkan/SPIR-V backends (not macOS)
+if(NOT APPLE)
+  target_link_libraries(xenia-app PRIVATE
+    xenia-gpu-vulkan
+    xenia-ui-vulkan
+    glslang-spirv
+  )
+endif()
 
 # Non-Android specific (always true for Windows/Linux)
 target_link_libraries(xenia-app PRIVATE
@@ -88,9 +96,11 @@ target_link_libraries(xenia-app PRIVATE
   xenia-hid-sdl
 )
 
-# x64 backend
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+# Architecture-specific backend
+if(XE_TARGET_X86_64)
   target_link_libraries(xenia-app PRIVATE xenia-cpu-backend-x64)
+elseif(XE_TARGET_AARCH64)
+  target_link_libraries(xenia-app PRIVATE xenia-cpu-backend-a64)
 endif()
 
 # Platform-specific libraries
