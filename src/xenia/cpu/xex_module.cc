@@ -87,7 +87,7 @@ namespace cpu {
 using xe::kernel::KernelState;
 
 XexModule::XexModule(Processor* processor, KernelState* kernel_state)
-    : Module(processor), processor_(processor), kernel_state_(kernel_state) {}
+    : Module(processor), kernel_state_(kernel_state) {}
 
 XexModule::~XexModule() {}
 
@@ -941,8 +941,9 @@ bool XexModule::Load(const std::string_view name, const std::string_view path,
   // back to xex_security_info otherwise
   base_address_ = xex_security_info()->load_address;
   xe::be<uint32_t>* base_addr_opt = nullptr;
-  if (GetOptHeader(XEX_HEADER_IMAGE_BASE_ADDRESS, &base_addr_opt))
+  if (GetOptHeader(XEX_HEADER_IMAGE_BASE_ADDRESS, &base_addr_opt)) {
     base_address_ = *base_addr_opt;
+  }
 
   // Setup debug info.
   name_ = name;

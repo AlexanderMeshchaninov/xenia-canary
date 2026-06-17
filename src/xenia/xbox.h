@@ -275,7 +275,7 @@ enum : XNotificationID {
   kXNotificationXmpTitlePlayListContentChanged = 0x8A000005,
   kXNotificationXmpLocalMediaContentChanged = 0x8A000006,
   kXNotificationXmpDashNowPlayingQueueModeChanged = 0x8A000007,
-  kXNotificationXmpDashInItChanged = 0x8A000009,
+  kXNotificationXmpDashInitChanged = 0x8A000009,
   kXNotificationXmpPlaybackBehaviorChangedEx = 0x8A00000A,
 
   // XNotification Party
@@ -311,11 +311,16 @@ enum class XLanguage : uint32_t {
   kKorean = 7,
   kTChinese = 8,
   kPortuguese = 9,
-  kSChinese = 10,
+  kMaxBaseLanguages = 10,
   kPolish = 11,
   kRussian = 12,
+  kSwedish = 13,
+  kTurkish = 14,
+  kNorwegian = 15,
+  kDutch = 16,
+  kSChinese = 17,
   // STFS headers can't support any more languages than these
-  kMaxLanguages = 13
+  kMaxLanguages = 18
 };
 
 enum class XOnlineCountry : uint32_t {
