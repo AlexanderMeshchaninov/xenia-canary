@@ -247,7 +247,6 @@ DECLARE_XAM_EXPORT1(XamGetExecutionId, kNone, kImplemented);
 dword_result_t XamLoaderSetLaunchData_entry(lpvoid_t data, dword_t size) {
   auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
   auto& loader_data = xam->loader_data();
-  loader_data.launch_data_present = size ? true : false;
   loader_data.launch_data.resize(size);
   std::memcpy(loader_data.launch_data.data(), data, size);
   return 0;
@@ -261,7 +260,7 @@ dword_result_t XamLoaderGetLaunchDataSize_entry(lpdword_t size_ptr) {
 
   auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
   auto& loader_data = xam->loader_data();
-  if (!loader_data.launch_data_present) {
+  if (loader_data.launch_data.empty()) {
     *size_ptr = 0;
     return X_ERROR_NOT_FOUND;
   }
@@ -275,7 +274,7 @@ dword_result_t XamLoaderGetLaunchData_entry(lpvoid_t buffer_ptr,
                                             dword_t buffer_size) {
   auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
   auto& loader_data = xam->loader_data();
-  if (!loader_data.launch_data_present) {
+  if (loader_data.launch_data.empty()) {
     return X_ERROR_NOT_FOUND;
   }
 
@@ -298,7 +297,6 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
   // Translate the launch path to a full path.
   if (raw_name_ptr && !raw_name_ptr.value().empty()) {
     loader_data.launch_path = xe::path_to_utf8(raw_name_ptr.value());
-    loader_data.launch_data_present = true;
     xam->SaveLoaderData();
     title = "Title was restarted";
     message =
@@ -457,6 +455,18 @@ DECLARE_XAM_EXPORT1(RtlSetLastNTError, kNone, kImplemented);
 
 dword_result_t RtlGetLastError_entry() { return XThread::GetLastError(); }
 DECLARE_XAM_EXPORT1(RtlGetLastError, kNone, kImplemented);
+
+dword_result_t XGetOverlappedExtendedError_entry(
+    pointer_t<XAM_OVERLAPPED> overlapped_ptr) {
+  if (!overlapped_ptr) {
+    return XThread::GetLastError();
+  }
+  if (overlapped_ptr->result == X_ERROR_IO_PENDING) {
+    return X_ERROR_IO_INCOMPLETE;
+  }
+  return static_cast<uint32_t>(overlapped_ptr->extended_error);
+}
+DECLARE_XAM_EXPORT1(XGetOverlappedExtendedError, kNone, kImplemented);
 
 dword_result_t GetLastError_entry() { return RtlGetLastError_entry(); }
 DECLARE_XAM_EXPORT1(GetLastError, kNone, kImplemented);
